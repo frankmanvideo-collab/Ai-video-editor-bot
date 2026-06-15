@@ -735,17 +735,115 @@ hook_text: a short 4-8 word viral hook sentence for first 3 seconds
         }
 
 
+def _fake_word_timestamps(text: str, duration_sec: float) -> list[dict]:
+    """
+    Create approximate word timestamps when provider does not support word-level Whisper.
+    This keeps caption rendering working even if AICredits rejects timestamp_granularities.
+    """
+    words = [w for w in str(text or "").split() if w.strip()]
+    if not words:
+        return []
+
+    total = max(float(duration_sec or 1.0), 1.0)
+    step = total / max(len(words), 1)
+
+    out = []
+    for i, word in enumerate(words):
+        start = i * step
+        end = min(total, start + max(0.20, step * 0.85))
+        out.append({
+            "word": word,
+            "start": start,
+            "end": end,
+        })
+
+    return out
+
+
 def ai_get_word_timestamps(audio_path: str, duration_sec: float) -> dict:
+    """
+    Get transcription with word timestamps.
+
+    Some OpenAI-compatible providers reject:
+        timestamp_granularities=["word"]
+
+    In that case they may return:
+        Invalid request body
+
+    So this function:
+    1. Tries true word-level timestamps.
+    2. If that fails, tries normal verbose_json transcription.
+    3. If that fails, tries plain text transcription.
+    4. If all fail, returns empty text/words so render can continue.
+    """
     timeout = max(60, int(duration_sec * 2))
-    with open(audio_path, "rb") as f:
-        resp = ai_client.audio.transcriptions.create(
-            model=os.environ.get("WHISPER_MODEL", "whisper-1"),
-            file=f,
-            response_format="verbose_json",
-            timestamp_granularities=["word"],
-            timeout=timeout,
-        )
-    return resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
+    model = os.environ.get("WHISPER_MODEL", "whisper-1")
+
+    # Try 1: True word-level timestamps
+    try:
+        with open(audio_path, "rb") as f:
+            resp = ai_client.audio.transcriptions.create(
+                model=model,
+                file=f,
+                response_format="verbose_json",
+                timestamp_granularities=["word"],
+                timeout=timeout,
+            )
+
+        data = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
+
+        if data.get("words"):
+            return data
+
+        text = data.get("text", "")
+        data["words"] = _fake_word_timestamps(text, duration_sec)
+        return data
+
+    except Exception as e:
+        logger.warning("Whisper word timestamps failed, falling back: %s", e)
+
+    # Try 2: verbose_json without word timestamp option
+    try:
+        with open(audio_path, "rb") as f:
+            resp = ai_client.audio.transcriptions.create(
+                model=model,
+                file=f,
+                response_format="verbose_json",
+                timeout=timeout,
+            )
+
+        data = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
+        text = data.get("text", "")
+        data["words"] = data.get("words") or _fake_word_timestamps(text, duration_sec)
+        return data
+
+    except Exception as e:
+        logger.warning("Whisper verbose_json fallback failed: %s", e)
+
+    # Try 3: plain text transcription
+    try:
+        with open(audio_path, "rb") as f:
+            resp = ai_client.audio.transcriptions.create(
+                model=model,
+                file=f,
+                response_format="text",
+                timeout=timeout,
+            )
+
+        text = str(resp)
+        return {
+            "text": text,
+            "words": _fake_word_timestamps(text, duration_sec),
+        }
+
+    except Exception as e:
+        logger.warning("Whisper text fallback failed: %s", e)
+
+    # Last fallback: no captions, but do not fail full render
+    return {
+        "text": "",
+        "words": [],
+        }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # VIDEO COMPOSITION
