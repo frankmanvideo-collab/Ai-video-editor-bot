@@ -1,43 +1,23 @@
+Upload all files/folders except:
+- .env
+- database files
+- user videos
+- downloaded temp files
 
----
-
-# 9. `UPLOAD_CHECKLIST.txt`
-
-```txt
-GODMODE VIDEO BOT - UPLOAD CHECKLIST
-
-Upload this complete folder to GitHub private repo.
-
-Files included:
-- bot.py
-- requirements.txt
-- Dockerfile
-- .dockerignore
-- .gitignore
-- .env.example
-- README.md
-- SECURITY_NOTES.md
-- DEPLOY_MOBILE_GUIDE.md
-- run.sh
-- downloads/.gitkeep
-- assets/pop_sounds/.gitkeep
-- assets/backgrounds/.gitkeep
-- assets/transition_sfx/.gitkeep
-
-Later you update/add:
-- Real environment variables in hosting dashboard, not GitHub
+Add assets later:
 - assets/pop_sounds/*.mp3
 - assets/backgrounds/*.mp3
 - assets/transition_sfx/*.mp3
 
-Do NOT upload:
-- .env with real secrets
-- database files
-- user videos
-- API keys directly in code
-
-Current bot settings:
-- Max video: 2 minutes
-- Max file: 150MB
-- Free trial: 15 seconds
-- Pricing: ₹29 up to 60s, ₹49 up to 2min
+Main env vars:
+BOT_TOKEN
+ADMIN_USER_ID
+AICREDITS_API_KEY
+AICREDITS_BASE_URL
+UPIGATEWAY_API_KEY
+UPIGATEWAY_SECRET
+WEBHOOK_URL
+FLASK_PORT
+FONT_PATH
+WORKER_COUNT
+MAX_FILE_SIZE_MB
