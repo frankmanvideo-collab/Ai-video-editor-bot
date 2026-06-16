@@ -1,17 +1,14 @@
-# GodMode Video Bot
+# GodMode Video Bot V3
+Low-RAM FFmpeg Telegram AI Reel Growth Editor.
 
-Telegram AI video editing bot.
+## Features
+- Mini Audit ₹19, Full Roast ₹39
+- Edit 60s ₹49, Viral Pack 2min ₹79
+- Platform/Niche/Goal flow
+- Hook options, custom CTA
+- AI viral score/report/hashtags/caption
+- FFmpeg + ASS captions low-RAM render
+- UPI Gateway wallet auto-credit webhook
 
-## Files
-- `bot.py` - main bot code
-- `requirements.txt` - Python dependencies
-- `Dockerfile` - Docker setup with ffmpeg
-- `.env.example` - sample environment variables
-- `assets/` - pop sounds, BGM, transition SFX
-
-## Run with Docker
-
-Create `.env` on the server with real secrets, then:
-
-```bash
-./run.sh
+## Deploy
+Use Docker. Set environment variables from `.env.example` in hosting dashboard.
