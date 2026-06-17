@@ -55,6 +55,23 @@ def init_db() -> None:
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           processed_at DATETIME
         );
+        CREATE TABLE IF NOT EXISTS manual_recharges(
+          request_id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          amount_paisa INTEGER NOT NULL,
+          secret_code TEXT NOT NULL,
+          utr TEXT UNIQUE,
+          screenshot_file_id TEXT,
+          status TEXT DEFAULT 'WAITING_UTR',
+          attempts INTEGER DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          expires_at DATETIME NOT NULL,
+          submitted_at DATETIME,
+          approved_at DATETIME,
+          approved_by INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_manual_user_status ON manual_recharges(user_id,status);
+        CREATE INDEX IF NOT EXISTS idx_manual_utr ON manual_recharges(utr);
         CREATE TABLE IF NOT EXISTS sessions(
           user_id INTEGER PRIMARY KEY,
           data TEXT NOT NULL,
@@ -161,3 +178,85 @@ def stats() -> dict:
     rev=c.execute("SELECT COALESCE(SUM(amount_paisa),0) FROM order_payments WHERE status='PAID'").fetchone()[0]
     jobs=c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('QUEUED','PROCESSING')").fetchone()[0]
     return {"users":users[0],"wallet":users[1],"revenue":rev,"jobs":jobs}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Manual UPI recharge fallback
+# ─────────────────────────────────────────────────────────────────────────────
+
+def create_manual_recharge(request_id: str, user_id: int, amount_paisa: int, secret_code: str, expires_at: str) -> None:
+    with tx() as c:
+        c.execute(
+            """INSERT INTO manual_recharges(request_id,user_id,amount_paisa,secret_code,expires_at)
+               VALUES(?,?,?,?,?)""",
+            (request_id, user_id, amount_paisa, secret_code, expires_at),
+        )
+
+def get_manual_recharge(request_id: str) -> Optional[dict]:
+    r = conn().execute("SELECT * FROM manual_recharges WHERE request_id=?", (request_id,)).fetchone()
+    return dict(r) if r else None
+
+def get_latest_waiting_manual(user_id: int) -> Optional[dict]:
+    r = conn().execute(
+        """SELECT * FROM manual_recharges
+           WHERE user_id=? AND status IN ('WAITING_UTR','WAITING_CODE','SUBMITTED')
+           ORDER BY created_at DESC LIMIT 1""",
+        (user_id,),
+    ).fetchone()
+    return dict(r) if r else None
+
+def manual_utr_exists(utr: str) -> bool:
+    r = conn().execute("SELECT request_id FROM manual_recharges WHERE utr=?", (utr,)).fetchone()
+    return bool(r)
+
+def submit_manual_utr(request_id: str, utr: str) -> None:
+    with tx() as c:
+        c.execute(
+            """UPDATE manual_recharges
+               SET utr=?, status='WAITING_CODE', submitted_at=CURRENT_TIMESTAMP
+               WHERE request_id=? AND status='WAITING_UTR'""",
+            (utr, request_id),
+        )
+
+def mark_manual_submitted(request_id: str) -> None:
+    with tx() as c:
+        c.execute("UPDATE manual_recharges SET status='SUBMITTED' WHERE request_id=? AND status='WAITING_CODE'", (request_id,))
+
+def increment_manual_attempt(request_id: str) -> int:
+    with tx() as c:
+        c.execute("UPDATE manual_recharges SET attempts=attempts+1 WHERE request_id=?", (request_id,))
+        r = c.execute("SELECT attempts FROM manual_recharges WHERE request_id=?", (request_id,)).fetchone()
+        return int(r["attempts"]) if r else 0
+
+def fail_manual_recharge(request_id: str, status: str = 'FAILED') -> None:
+    with tx() as c:
+        c.execute("UPDATE manual_recharges SET status=? WHERE request_id=?", (status, request_id))
+
+def approve_manual_recharge(request_id: str, admin_id: int) -> Optional[dict]:
+    with tx() as c:
+        r = c.execute("SELECT * FROM manual_recharges WHERE request_id=?", (request_id,)).fetchone()
+        if not r or r["status"] != "SUBMITTED":
+            return None
+        c.execute(
+            "UPDATE manual_recharges SET status='APPROVED', approved_at=CURRENT_TIMESTAMP, approved_by=? WHERE request_id=? AND status='SUBMITTED'",
+            (admin_id, request_id),
+        )
+        if c.rowcount == 0:
+            return None
+        return dict(r)
+
+def reject_manual_recharge(request_id: str, admin_id: int) -> Optional[dict]:
+    with tx() as c:
+        r = c.execute("SELECT * FROM manual_recharges WHERE request_id=?", (request_id,)).fetchone()
+        if not r or r["status"] not in ('SUBMITTED','WAITING_CODE','WAITING_UTR'):
+            return None
+        c.execute("UPDATE manual_recharges SET status='REJECTED', approved_by=? WHERE request_id=?", (admin_id, request_id))
+        return dict(r)
+
+def count_manual_approved_today(user_id: int) -> int:
+    r = conn().execute(
+        """SELECT COUNT(*) AS c FROM manual_recharges
+           WHERE user_id=? AND status='APPROVED' AND date(approved_at)=date('now','localtime')""",
+        (user_id,),
+    ).fetchone()
+    return int(r["c"] if r else 0)
