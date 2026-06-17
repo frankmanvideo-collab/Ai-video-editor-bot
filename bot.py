@@ -1,3 +1,4 @@
+from db import init_db
 from __future__ import annotations
 import asyncio, logging, signal, threading, time
 from flask import Flask, jsonify
