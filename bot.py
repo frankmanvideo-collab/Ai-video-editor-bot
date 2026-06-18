@@ -1,16 +1,18 @@
 from __future__ import annotations
 import asyncio, logging, signal, threading, time
-from flask import Flask, jsonify
+from flask import Flask, jsonify, redirect
+from urllib.parse import quote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 from config import *
-from db import init_db, get_user, save_session, load_session, clear_session, set_balance, stats, get_latest_waiting_manual, submit_manual_utr, mark_manual_submitted, increment_manual_attempt, fail_manual_recharge, approve_manual_recharge, reject_manual_recharge, credit_wallet, approve_manual_recharge_and_credit
+from db import init_db, get_user, save_session, load_session, clear_session, set_balance, stats, get_latest_waiting_manual, submit_manual_utr, mark_manual_submitted, increment_manual_attempt, fail_manual_recharge, approve_manual_recharge, reject_manual_recharge, credit_wallet, approve_manual_recharge_and_credit, get_manual_recharge
 from keyboards import *
 from jobs import enqueue, worker_loop, video_queue as _vq, service_price, service_max, SERVICE_PRICE
 import jobs
 from payments import create_order, handle_payment_webhook, create_manual_recharge_request, validate_utr_format, normalize_utr
 from utils import rupees_str, escape_md, cleanup_old_files
+import qrcode
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=logging.INFO)
 logger=logging.getLogger("GodModeV3")
@@ -20,6 +22,20 @@ flask_app=Flask(__name__)
 def health(): return jsonify({"status":"ok","version":BOT_VERSION}),200
 @flask_app.route("/webhook/payment", methods=["POST"])
 def payment_webhook(): return handle_payment_webhook()
+
+@flask_app.route("/upi/<request_id>")
+def upi_deeplink(request_id: str):
+    req = get_manual_recharge(request_id)
+    if not req:
+        return "Invalid or expired recharge request", 404
+    amount_rs = float(req["amount_paisa"]) / 100
+    upi_url = (
+        f"upi://pay?pa={MANUAL_UPI_ID}"
+        f"&pn={quote(MANUAL_UPI_NAME)}"
+        f"&am={amount_rs:.2f}"
+        f"&tn={quote(str(req['secret_code']))}"
+    )
+    return redirect(upi_url, code=302)
 
 def run_flask():
     try:
@@ -115,7 +131,7 @@ async def handle_text(update:Update, context:ContextTypes.DEFAULT_TYPE):
         sess["awaiting_manual_code"]=True
         sess["manual_utr"]=utr
         save_session(u.id,sess)
-        await update.message.reply_text("✅ UTR saved. Now send the Secret Code shown in your recharge message.")
+        await update.message.reply_text("✅ UTR saved. Now send the payment note/code shown in your UPI receipt. It starts with PAY. Check transaction details/remarks in your UPI app.")
         return
 
     # Manual recharge secret-code step
@@ -216,17 +232,31 @@ async def callback(update:Update, context:ContextTypes.DEFAULT_TYPE):
         sess["awaiting_manual_utr"]=True
         sess["awaiting_manual_code"]=False
         save_session(uid,sess)
-        text=(
+        # Do not show secret code or raw UPI ID in chat. The secret code is embedded
+        # inside the UPI QR / payment note. User will enter it only after UTR submission.
+        public_pay_url = f"{WEBHOOK_URL}/upi/{res['request_id']}" if WEBHOOK_URL else ""
+        caption=(
             f"💳 Manual UPI Recharge\n\n"
             f"Amount: ₹{amount}\n"
-            f"Recharge ID: {res['request_id']}\n"
-            f"Secret Code: {res['secret_code']}\n\n"
-            f"Pay to UPI ID:\n{res['upi_id']}\n\n"
-            f"UPI Link:\n{res['upi_url']}\n\n"
-            f"After payment, reply here with your UTR/RRN number.\n"
-            f"Your request expires at: {res['expires_at']}"
+            f"Recharge ID: {res['request_id']}\n\n"
+            f"Step 1: Scan this QR and pay exact amount.\n"
+            f"Step 2: After payment, reply with your UTR/RRN number.\n"
+            f"Step 3: Bot will ask for the payment note/code shown in your UPI receipt.\n"
+            f"Step 4: Admin verifies and approves balance.\n\n"
+            f"Expires at: {res['expires_at']}"
         )
-        await q.edit_message_text(text)
+        qr_path = DOWNLOADS_DIR / f"qr_{res['request_id']}.png"
+        try:
+            qrcode.make(res["upi_url"]).save(qr_path)
+            buttons=[]
+            if public_pay_url:
+                buttons.append([InlineKeyboardButton("📲 Open UPI App", url=public_pay_url)])
+            await q.message.reply_photo(photo=open(qr_path, "rb"), caption=caption, reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
+            await q.edit_message_text("✅ Recharge QR generated. Please follow the instructions above.")
+        except Exception as e:
+            logger.warning("QR generation/send failed: %s", e)
+            fallback = caption + (f"\n\nOpen payment link:\n{public_pay_url}" if public_pay_url else f"\n\nUPI Link:\n{res['upi_url']}")
+            await q.edit_message_text(fallback)
         return
 
     sess=load_session(uid) or {}
