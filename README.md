@@ -120,3 +120,10 @@ AI video editor, AI shorts editor, AI reels editor, Telegram video editor bot, I
 ## Try the Bot
 
 👉 https://t.me/aivideoeditor12_bot
+## Official Telegram Links
+
+Official Bot: @aivideoeditor12_bot  
+Open Bot: https://t.me/aivideoeditor12_bot  
+
+Official Channel: @AIVideoEditorReels  
+Channel Link: https://t.me/AIVideoEditorReels
